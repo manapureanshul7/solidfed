@@ -1,0 +1,13 @@
+{
+  "name": "solidfed-server",
+  "version": "0.1.0",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "dotenv": "^16.0.3",
+    "@inrupt/solid-client": "^1.30.0",
+    "@inrupt/solid-client-authn-node": "^1.17.1"
+  }
+}

@@ -4,40 +4,102 @@ This is the client application for SolidFed, an asynchronous federated learning 
 
 ## Table of Contents
 
+- [Features](#features)
+- [Architecture Overview](#architecture-overview)
+- [Dataflow Overview](#dataflow-overview)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Usage](#usage)
+  - [CLI Interface](#cli-interface)
   - [Authentication](#authentication)
   - [Model Registration](#model-registration)
-  - [Data Download](#data-download)
-  - [Model Download](#model-download)
-  - [Local Training](#local-training)
-  - [Weight Upload](#weight-upload)
-- [CLI Commands](#cli-commands)
+  - [Data and Model Management](#data-and-model-management)
+  - [Training and Contribution](#training-and-contribution)
+- [Privacy Features](#privacy-features)
+- [API Examples](#api-examples)
 - [Troubleshooting](#troubleshooting)
-- [Advanced Usage](#advanced-usage)
-- [Architecture Overview](#architecture-overview)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Features
+
+* **Interactive CLI** - User-friendly command-line interface for all operations
+* **Solid Pod Integration** - Direct access to decentralized data storage
+* **Asynchronous Participation** - Contribute to federated learning on your own schedule
+* **Privacy Protection** - Built-in differential privacy options to protect training data
+* **Flexible Training** - Support for custom training scripts and parameters
+* **Multi-Model Support** - Work with multiple federated learning models simultaneously
+
+## Architecture Overview
+
+The SolidFed client is part of a larger federated learning ecosystem with the following components:
+
+### Core Components
+
+1. **Client Application** - This command-line tool that enables users to participate in federated learning
+2. **Solid Pod Storage** - Decentralized storage infrastructure that hosts data and model files
+3. **Server Orchestrator** - Central service that manages model registration and updates
+4. **Training Engine** - Python-based local training environment that runs on the client's machine
+
+### Key Architectural Principles
+
+- **Data Sovereignty**: Local data never leaves the user's device; only model updates are shared
+- **Privacy Preservation**: Differential privacy mechanisms protect against data extraction
+- **Decentralized Storage**: All shared model files are hosted on Solid Pods rather than centralized servers
+- **Asynchronous Updates**: Clients can contribute to the global model at any time
+- **Flexible Integration**: Support for various ML frameworks and training algorithms
+
+## Dataflow Overview
+
+The client participates in federated learning through these dataflow steps:
+
+1. **Authentication and Registration**
+   ```
+   Client --> Solid Pod: Authenticate using client credentials
+   Client --> Server: Register for model access
+   Server --> Solid Pod: Configure permissions for client
+   Server --> Client: Return model URL
+   ```
+
+2. **Model and Data Acquisition**
+   ```
+   Client --> Solid Pod: Fetch current global model
+   Client --> Local Storage: Download training data (optional)
+   Client --> Local Storage: Save model and trainer script
+   ```
+
+3. **Local Training**
+   ```
+   Client: Execute training script on local data
+   Client: Generate model update
+   Client: Apply differential privacy (optional)
+   ```
+
+4. **Model Contribution**
+   ```
+   Client --> Server: Upload model update
+   Server --> Solid Pod: Integrate update with global model
+   Server --> Client: Confirm successful contribution
+   ```
 
 ## Prerequisites
 
-Before using the SolidFed Client, you need:
-
-- **Node.js** (v14 or higher)
-- **npm** (v6 or higher)
-- **Python** (v3.6 or higher) for running the training scripts
-- **A Solid Pod** (e.g., on [SolidCommunity.net](https://solidcommunity.net/))
-- **Client ID & Secret** for your Solid account
+* **Node.js** (v14 or higher)
+* **npm** (v6 or higher)
+* **Python** (v3.6 or higher) for running the training scripts
+* **A Solid Pod** (e.g., on [SolidCommunity.net](https://solidcommunity.net/))
+* **Client ID & Secret** for your Solid account (authentication details)
 
 ## Installation
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/solidfed.git
+   git clone https://github.com/manapureanshul7/solidfed.git
    cd solidfed/client
    ```
 
-2. Install dependencies:
+2. Install Node.js dependencies:
    ```bash
    npm install
    ```
@@ -47,12 +109,17 @@ Before using the SolidFed Client, you need:
    pip install numpy tensorflow pandas
    ```
 
+4. Make the CLI executable (optional):
+   ```bash
+   chmod +x cli.js
+   ```
+
 ## Configuration
 
 Create a `.env` file in the client directory with the following variables:
 
-```
-# Required: Your Solid Pod authentication details
+```dotenv
+# Required: Solid Pod authentication details
 SOLID_OIDC_ISSUER=https://solidcommunity.net
 SOLID_CLIENT_ID=your_client_id
 SOLID_CLIENT_SECRET=your_client_secret
@@ -72,13 +139,21 @@ To generate your Client ID & Secret on SolidCommunity.net:
 
 ## Usage
 
-The SolidFed client provides a command-line interface (CLI) for all operations. Launch it with:
+### CLI Interface
+
+Start the SolidFed client CLI with:
 
 ```bash
 npm start
 ```
 
-This will start the interactive CLI menu with the following options:
+Or directly:
+
+```bash
+./cli.js
+```
+
+The interactive menu provides the following options:
 
 ```
 ===== SolidFed CLI =====
@@ -96,16 +171,23 @@ This will start the interactive CLI menu with the following options:
 
 **Option 1: Login to Solid Pod**
 
-This step authenticates you with your Solid Pod using the client credentials flow.
+This authenticates with your Solid Pod using client credentials:
 
-If you have already configured `SOLID_CLIENT_ID` and `SOLID_CLIENT_SECRET` in your `.env` file, the client will use those credentials. Otherwise, you will be prompted to enter them manually.
+```bash
+# Using curl
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"clientId": "your_client_id", "clientSecret": "your_client_secret"}' \
+  https://solidcommunity.net/.oidc/token
+```
+
+If you've configured your `.env` file, the CLI will use those credentials automatically. Otherwise, you'll be prompted:
 
 ```
 Enter your Token Identifier: your_client_id
 Enter your Token Secret: your_client_secret
 ```
 
-Upon successful authentication, the CLI will display:
+Upon successful authentication, you'll see:
 ```
 ✅ Logged in as https://yourusername.solidcommunity.net/profile/card#me
 ```
@@ -114,152 +196,192 @@ Upon successful authentication, the CLI will display:
 
 **Option 2: Register for a model**
 
-This step connects you to the orchestrator server and requests access to a specific federated learning model. You must be logged in first.
+This connects you to the orchestrator server and requests access to a specific model:
 
 1. Select a model from the list:
    ```
    ===== Select a Model =====
    1. breast-cancer-detection
-   2. movie-recommendation
+   2. movie-recommender
    3. dummy-model
    4. Back to main menu
    ```
+This are currently statically updated, new functionality is to be added to fetch them directly from the Server's pod.
 
-2. The client sends a registration request to the server:
+2. The client registers with the server:
    ```
-   Registering for model: breast-cancer-detection...
-   ```
-
-3. The server creates necessary containers and grants you read permissions:
-   ```
-   ✅ Successfully registered for breast-cancer-detection
-   📁 Model URL: https://solidfed.solidcommunity.net/solidfed/breast-cancer-detection/
+   Registering for model: test-2...
+   ✅ Successfully registered for test-2
+   📁 Model URL: https://solidfed.solidcommunity.net/solidfed/test-2/
    ```
 
-The model URL is stored for future operations, allowing direct access to the model files.
-
-### Data Download
+### Data and Model Management
 
 **Option 3: Download training data**
 
-This step downloads training datasets for local use. If `CLIENT_DATASET_URL` is set in your `.env` file, it will use that location; otherwise, you will be prompted for a URL.
+Download datasets for local training:
 
 ```
 ↓ Fetching container: https://yourusername.solidcommunity.net/datasets/
 ↓ Downloading train.csv → ./dataset/train.csv
-↓ Downloading test.csv → ./dataset/test.csv
-✅ Downloaded 2 file(s) into ./dataset
+✅ Downloaded 1 file(s) into ./dataset
 ```
-
-### Model Download
 
 **Option 4: Download model & trainer code**
 
-This step downloads the global model and trainer script from the Solid Pod. It uses the model URL obtained during registration.
+Fetch the current global model and training script:
 
 ```
-Downloading model and trainer for: breast-cancer-detection...
-Using stored model URL: https://solidfed.solidcommunity.net/solidfed/breast-cancer-detection/
-↓ Fetching globalModel.bin from https://solidfed.solidcommunity.net/solidfed/breast-cancer-detection/
+Downloading model and trainer for: test-2...
+↓ Fetching globalModel.bin from https://solidfed.solidcommunity.net/solidfed/test-2/
 ✅ Downloaded globalModel.bin using direct fetch
-↓ Fetching clientTrainer.py from https://solidfed.solidcommunity.net/solidfed/breast-cancer-detection/
+↓ Fetching clientTrainer.py from https://solidfed.solidcommunity.net/solidfed/test-2/
 ✅ Downloaded clientTrainer.py using direct fetch
-✅ Downloaded model and trainer successfully
 ```
 
-The files are saved to your local directory and can be examined or modified as needed.
-
-### Local Training
+### Training and Contribution
 
 **Option 5: Train locally & upload weights**
 
-This step executes the trainer script on your local data and then uploads the resulting weights to contribute to the global model.
+Execute training and contribute your model updates:
 
-1. The client executes the trainer script:
-   ```
-   Running local training...
-   Executing clientTrainer.py...
-   Training on local data...
-   Training complete. Weights saved to localWeights.bin
-   ```
+```
+Running local training...
+Executing clientTrainer.py...
+Training on local data...
+Training complete. Weights saved to localWeights.bin
 
-2. Enter the round number when prompted:
-   ```
-   Federated round number (default: 1): 2
-   ```
+===== Upload Options =====
+1. Upload weights without privacy protection
+2. Upload weights with differential privacy
+3. View differential privacy explanation
+4. Cancel upload
+```
 
-3. The client uploads your weights to the orchestrator:
-   ```
-   Uploading weights for model breast-cancer-detection, round 2...
-   ✅ Uploaded to https://solidfed.solidcommunity.net/solidfed/breast-cancer-detection/globalModel.bin
-   ```
+If you choose differential privacy:
 
-## CLI Commands
+```
+===== Configure Differential Privacy =====
+Epsilon (ε) - Privacy Budget: 1.0
+Delta (δ) - Privacy Failure Probability: 1e-5
+L2 Norm Clipping Threshold: 1.0
+Approximate Training Dataset Size: 1000
 
-The SolidFed client is designed with an interactive menu, but if you prefer direct commands, here's a reference:
+Applying differential privacy with parameters:
+  - Epsilon: 1.0
+  - Delta: 0.00001
+  - L2 Norm Clip: 1.0
+  - Sample Rate: 0.001
+```
 
-- **Login**: `node cli.js login`
-- **Register**: `node cli.js register MODEL_NAME`
-- **Download data**: `node cli.js download-data [URL]`
-- **Download model**: `node cli.js download-model MODEL_NAME`
-- **Train**: `node cli.js train MODEL_NAME ROUND`
-- **Logout**: `node cli.js logout`
+## Privacy Features
+
+The SolidFed client offers built-in differential privacy to protect your training data:
+
+- **Noise Injection**: Adds calibrated Gaussian noise to model updates
+- **L2 Norm Clipping**: Limits the influence of any single training example
+- **Privacy Budget Management**: Tracks cumulative privacy cost across rounds
+- **Privacy-Utility Tradeoff**: Configurable parameters to balance protection and model quality
+
+Configure privacy settings directly in the upload menu:
+
+```
+===== Configure Differential Privacy =====
+Epsilon (ε) - Privacy Budget:
+  - Low values (0.1-1.0): High privacy, potentially lower utility
+  - Medium values (1.0-5.0): Good privacy-utility tradeoff
+  - High values (5.0+): Prioritizes utility over privacy
+```
+
+## API Examples
+
+### Model Registration with Curl
+
+```bash
+curl -X POST http://localhost:4000/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "webId": "https://user.solidcommunity.net/profile/card#me",
+    "modelName": "test-2"
+  }'
+```
+
+### Upload Model Weights with Curl
+
+```bash
+curl -X POST http://localhost:4000/upload \
+  -H "Content-Type: application/octet-stream" \
+  -H "webid: https://user.solidcommunity.net/profile/card#me" \
+  -H "round: 1" \
+  -H "modelName: test-2" \
+  --data-binary @./localWeights.bin
+```
+
+### Using the Client from NodeJS
+
+```javascript
+const { loginWithClientCreds } = require('./auth');
+const { downloadModelAndTrainer } = require('./download');
+const { trainWithDP } = require('./train');
+
+async function runFederatedLearningWorkflow() {
+  // 1. Authenticate
+  const session = await loginWithClientCreds();
+  
+  // 2. Register for a model (if not already registered)
+  // ... registration code ...
+  
+  // 3. Download model and trainer
+  await downloadModelAndTrainer(session, 'test-2');
+  
+  // 4. Train with differential privacy
+  const dpOptions = {
+    epsilon: 1.0,
+    delta: 1e-5,
+    l2NormClip: 1.0,
+    datasetSize: 1000
+  };
+  
+  await trainWithDP(session, 'test-2', dpOptions);
+}
+```
 
 ## Troubleshooting
 
-### Permission Issues
+### Authentication Issues
 
-If you encounter 403 Forbidden errors when trying to download files:
+- **Invalid Credentials**: Ensure your Client ID and Secret are correct and not expired
+- **OIDC Issuer**: Confirm the SOLID_OIDC_ISSUER value matches your identity provider
+- **Session Expiration**: Re-login if your session has timed out
 
-1. **Check Registration**: Ensure you've successfully registered for the model
-2. **Try Direct Fetch**: The client will attempt both direct fetch and library-based methods
-3. **Check URLs**: Verify the URLs in the debug output match your expected pod structure
-4. **Pod ACLs**: Check permissions on your Solid Pod through its web interface
+### File Access Problems
+
+- **403 Forbidden**: Ensure you've properly registered for the model
+- **File Not Found**: Check that the model URLs are correct
+- **Network Errors**: Verify your internet connection and Pod provider availability
 
 ### Training Errors
 
-If the training script fails:
+- **Python Environment**: Ensure Python 3.6+ is installed with required packages
+- **Training Script**: Check that clientTrainer.py is compatible with your local setup
+- **Dataset Structure**: Verify dataset folder exists with expected files
 
-1. **Check Python Version**: Ensure you're using Python 3.6+
-2. **Check Dependencies**: Install required packages with `pip install -r requirements.txt`
-3. **Data Path**: The trainer expects data in the `./dataset` directory
-4. **Model Format**: Ensure `globalModel.bin` is in the correct format (binary NumPy array)
+### Upload Issues
 
-## Advanced Usage
+- **Weights Format**: Ensure localWeights.bin is generated in the correct format
+- **Server Connection**: Verify the ORCHESTRATOR_URL is correct and server is running
+- **Permission Errors**: Check that your WebID has proper access permissions
 
-### Custom Training Scripts
+## Contributing
 
-You can modify the `clientTrainer.py` script to implement your own training logic:
+Contributions are welcome! To contribute to SolidFed Client:
 
-1. Download the script: `Option 4`
-2. Modify the script to change architecture, hyperparameters, etc.
-3. Run training with your changes: `Option 5`
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Commit your changes: `git commit -m 'Add amazing feature'`
+4. Push to the branch: `git push origin feature/amazing-feature`
+5. Open a Pull Request
 
-The only requirement is that your script should save weights to `localWeights.bin` in the format expected by the server.
+## License
 
-### Multiple Models
-
-You can work with multiple models simultaneously:
-
-1. Register for different models: `Option 2`
-2. Download each model separately: `Option 4`
-3. Train on each model locally
-4. Upload weights for each model: `Option 5`
-
-The client will keep track of the current model, which you can see displayed in the main menu.
-
-## Architecture Overview
-
-The SolidFed system follows an asynchronous federated learning approach where:
-
-1. **Server Orchestrator**: Central coordinator that manages registrations and updates
-2. **Solid Pods**: Decentralized storage for model files and data
-3. **Client CLI**: Interface for users to interact with the system
-
-The workflow consists of:
-- Registration: Client requests access to a model
-- Download: Client retrieves model files directly from Pods
-- Training: Client trains locally on their data
-- Upload: Client contributes weights back to the global model
-
-This architecture ensures data sovereignty while enabling collaborative learning across distributed clients.
+This project is licensed under the MIT License - see the LICENSE file for details.

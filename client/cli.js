@@ -1,44 +1,24 @@
 #!/usr/bin/env node
 // client/cli.js
 require('dotenv').config();
-const readline = require('readline');
 const fs = require('fs').promises;
 const fetch = require('node-fetch');
-const { loginWithClientCreds } = require('./auth');
-const { downloadTrainingData } = require('./download');
-const { downloadFile } = require('./download');
-const { uploadWeights } = require('./upload');
 const { execSync } = require('child_process');
+const { loginWithClientCreds } = require('./auth');
+const { downloadTrainingData, downloadFile } = require('./download');
+const { applyDifferentialPrivacy, computePrivacyCost } = require('./privacy');
+const { uploadWeights, uploadDPWeights, ask } = require('./upload');
 
 let session = null;
 let currentModelName = null;
-let currentModelUrl = null; // New variable to store model URL
+let currentModelUrl = null; // URL to the model container
 
 // Model options - could be fetched dynamically in future versions
 const MODEL_OPTIONS = [
-  'breast-cancer-detection',
-  'movie-recommendation',
+  'test-2',
+  'final',
   'dummy',
-  'dummy2',
-  'dummy3',
-  'dummy4',
 ];
-
-/** Helper to ask a question and get an answer */
-function ask(question, defaultVal = '') {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise(resolve => {
-    rl.question(
-      defaultVal
-        ? `${question} (default: ${defaultVal}): `
-        : `${question}: `,
-      answer => {
-        rl.close();
-        resolve(answer.trim() || defaultVal);
-      }
-    );
-  });
-}
 
 /** Show menu for model selection */
 async function showModelMenu() {
@@ -168,8 +148,181 @@ async function downloadModelAndTrainer(session, modelName) {
   }
 }
 
-/** Train locally and upload weights */
-async function trainAndUpload(session, modelName) {
+/**
+ * Display explanation about differential privacy
+ */
+async function showDPExplanation() {
+  console.log('\n===== Differential Privacy Explanation =====');
+  console.log('Differential privacy is a mathematical framework that provides strong privacy guarantees.');
+  console.log('It ensures that model weights don\'t reveal information about specific training examples.');
+  console.log('\nKey parameters:');
+  console.log('  - Epsilon (ε): Privacy budget. Lower values (0.1-1.0) provide stronger privacy but may reduce');
+  console.log('    model accuracy. Higher values (1.0-10.0) preserve more accuracy but offer less privacy.');
+  console.log('  - Delta (δ): Probability of privacy failure. Should be very small (typically 1/training_size).');
+  console.log('  - L2 Norm Clip: Limits the influence of any single training example. Lower values (0.1-1.0)');
+  console.log('    provide stronger privacy guarantees but may impact convergence.');
+  console.log('\nRecommended settings:');
+  console.log('  - For strong privacy: ε=0.1, L2 Norm Clip=1.0');
+  console.log('  - Balanced privacy/utility: ε=1.0, L2 Norm Clip=1.0');
+  console.log('  - Better utility, less privacy: ε=10.0, L2 Norm Clip=1.0');
+  console.log('\nPress Enter to continue...');
+  return new Promise(resolve => {
+    process.stdin.once('data', () => {
+      resolve();
+    });
+  });
+}
+
+/**
+ * Configure differential privacy parameters and upload weights
+ */
+async function configureDPAndUpload(session, modelName, round) {
+  console.log('\n===== Configure Differential Privacy =====');
+  console.log('Setting privacy parameters:');
+  
+  // Get epsilon (privacy budget)
+  console.log('\nEpsilon (ε) - Privacy Budget:');
+  console.log('  - Low values (0.1-1.0): High privacy, potentially lower utility');
+  console.log('  - Medium values (1.0-5.0): Good privacy-utility tradeoff');
+  console.log('  - High values (5.0+): Prioritizes utility over privacy');
+  const epsilonStr = await ask('Enter epsilon value', '1.0');
+  let epsilon = parseFloat(epsilonStr);
+  if (isNaN(epsilon) || epsilon <= 0) {
+    console.log('Invalid epsilon value, using default (1.0)');
+    epsilon = 1.0;
+  }
+  
+  // Get delta (failure probability)
+  console.log('\nDelta (δ) - Privacy Failure Probability:');
+  console.log('  - Should be very small, typically 1/N where N is your training dataset size');
+  console.log('  - Example: For 10,000 training examples, use 0.0001 or smaller');
+  const deltaStr = await ask('Enter delta value', '1e-5');
+  let delta = parseFloat(deltaStr);
+  if (isNaN(delta) || delta <= 0 || delta >= 1) {
+    console.log('Invalid delta value, using default (1e-5)');
+    delta = 1e-5;
+  }
+  
+  // Get L2 norm clipping threshold
+  console.log('\nL2 Norm Clipping Threshold:');
+  console.log('  - Controls the maximum influence of any training example');
+  console.log('  - Lower values (0.1-1.0) limit influence but may slow convergence');
+  console.log('  - Higher values (1.0+) allow more influence but may reduce privacy');
+  const clipStr = await ask('Enter L2 norm clipping threshold', '1.0');
+  let l2NormClip = parseFloat(clipStr);
+  if (isNaN(l2NormClip) || l2NormClip <= 0) {
+    console.log('Invalid L2 norm clipping value, using default (1.0)');
+    l2NormClip = 1.0;
+  }
+  
+  // Estimate dataset size for privacy analysis
+  console.log('\nApproximate Training Dataset Size:');
+  console.log('  - Used to calculate privacy cost over multiple rounds');
+  const dataSizeStr = await ask('Enter approximate number of training examples', '1000');
+  let dataSize = parseInt(dataSizeStr, 10);
+  if (isNaN(dataSize) || dataSize <= 0) {
+    console.log('Invalid dataset size, using default (1000)');
+    dataSize = 1000;
+  }
+  
+  // Calculate sample rate
+  const sampleRate = 1.0 / dataSize;
+  
+  // Create DP parameters object
+  const dpParams = {
+    epsilon,
+    delta,
+    l2NormClip,
+    sampleRate
+  };
+  
+  // Calculate privacy cost for the current round
+  if (round > 1) {
+    const cost = computePrivacyCost(epsilon, delta, round, sampleRate);
+    console.log(`\n📊 Estimated cumulative privacy cost after ${round} rounds:`);
+    console.log(`  - Epsilon: ${cost.epsilon.toFixed(4)}`);
+    console.log(`  - Delta: ${cost.delta.toExponential(4)}`);
+    
+    // Warn if privacy budget is high
+    if (cost.epsilon > 10) {
+      console.log('⚠️ Warning: High cumulative epsilon value may provide limited privacy guarantees.');
+      const confirmHighEpsilon = await ask('Continue with these settings? (yes/no)', 'yes');
+      if (confirmHighEpsilon.toLowerCase() !== 'yes' && confirmHighEpsilon.toLowerCase() !== 'y') {
+        return configureDPAndUpload(session, modelName, round);
+      }
+    }
+  }
+  
+  // Read weights file
+  try {
+    console.log('\nReading weights file...');
+    const weightsBuffer = await fs.readFile('./localWeights.bin');
+    
+    // Apply differential privacy
+    console.log('Applying differential privacy to weights...');
+    const dpWeightsBuffer = applyDifferentialPrivacy(weightsBuffer, dpParams);
+    
+    // Save DP weights to temporary file
+    await fs.writeFile('./dp_weights.bin', dpWeightsBuffer);
+    console.log('✅ Applied differential privacy and saved to dp_weights.bin');
+    
+    // Upload the DP weights
+    await uploadDPWeights(session, modelName, round, dpParams);
+    
+    // Cleanup temporary file
+    await fs.unlink('./dp_weights.bin').catch(() => {});
+    
+  } catch (err) {
+    console.error(`❌ Error: ${err.message}`);
+  }
+}
+
+/**
+ * Show menu for upload options after training
+ * Allows choosing between regular upload and differential privacy
+ */
+async function showUploadMenu(session, modelName, round) {
+  console.log('\n===== Upload Options =====');
+  console.log('1. Upload weights without privacy protection');
+  console.log('2. Upload weights with differential privacy');
+  console.log('3. View differential privacy explanation');
+  console.log('4. Cancel upload');
+  
+  const choice = await ask('Select an option');
+  
+  switch (choice) {
+    case '1':
+      console.log('\n⚠️ Warning: Uploading weights without privacy protection may leak information about your training data.');
+      const confirmNoDP = await ask('Are you sure you want to continue? (yes/no)', 'no');
+      if (confirmNoDP.toLowerCase() === 'yes' || confirmNoDP.toLowerCase() === 'y') {
+        await uploadWeights(session, modelName, round);
+      } else {
+        return showUploadMenu(session, modelName, round);
+      }
+      break;
+      
+    case '2':
+      await configureDPAndUpload(session, modelName, round);
+      break;
+      
+    case '3':
+      await showDPExplanation();
+      return showUploadMenu(session, modelName, round);
+      
+    case '4':
+      console.log('Upload canceled.');
+      break;
+      
+    default:
+      console.log('Invalid selection, please choose 1-4.');
+      return showUploadMenu(session, modelName, round);
+  }
+}
+
+/**
+ * Start local training and show upload options afterward
+ */
+async function trainLocallyAndShowUploadOptions(session, modelName) {
   if (!modelName) {
     console.log('No model selected. Please register for a model first.');
     return;
@@ -193,33 +346,16 @@ async function trainAndUpload(session, modelName) {
       throw new Error('Training did not produce localWeights.bin file');
     }
     
-    // Upload the weights
+    // Get the round number
     const roundStr = await ask('Federated round number', '1');
     const round = parseInt(roundStr, 10);
     if (isNaN(round) || round < 1) {
       throw new Error('Invalid round number');
     }
     
-    console.log(`Uploading weights for model ${modelName}, round ${round}...`);
-    const ORCHESTRATOR = process.env.ORCHESTRATOR_URL || 'http://localhost:4000';
+    // Show upload options menu
+    await showUploadMenu(session, modelName, round);
     
-    const response = await fetch(`${ORCHESTRATOR}/upload`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/octet-stream',
-        'webid': session.info.webId,
-        'modelName': modelName,
-        'round': round.toString()
-      },
-      body: await fs.readFile('./localWeights.bin')
-    });
-    
-    const result = await response.json();
-    if (result.success) {
-      console.log('✅ Uploaded to', result.url);
-    } else {
-      throw new Error(`Upload failed: ${result.error}`);
-    }
   } catch (err) {
     console.error(`❌ ${err.message}`);
   }
@@ -281,7 +417,8 @@ async function showMainMenu() {
         if (!session) {
           console.log('Please login first (option 1).');
         } else {
-          await trainAndUpload(session, currentModelName);
+          // Call the modified function that shows upload options after training
+          await trainLocallyAndShowUploadOptions(session, currentModelName);
         }
         break;
 
